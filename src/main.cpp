@@ -1,23 +1,19 @@
-#define TINY_GSM_MODEM_SIM7600   // Compatível com A7670SA
+#define TINY_GSM_MODEM_SIM7600
 #define TINY_GSM_RX_BUFFER 1024
 
 #include <Arduino.h>
 #include <TinyGsmClient.h>
 #include <HardwareSerial.h>
 
-#define MODEM_RX     16
-#define MODEM_TX     17
-#define MODEM_PWRKEY 4
+#define MODEM_RX 16
+#define MODEM_TX 17
 
 HardwareSerial SerialAT(2);
 
-void ligarModem() {
-  pinMode(MODEM_PWRKEY, OUTPUT);
-  digitalWrite(MODEM_PWRKEY, LOW);
-  delay(1000);
-  digitalWrite(MODEM_PWRKEY, HIGH);
-  delay(3000);
-}
+unsigned long ultimaConsulta = 0;
+const unsigned long intervaloConsulta = 10000;  // 10 segundos
+
+bool gpsAtivo = false;
 
 void enviarComandoAT(const char *comando, unsigned long espera = 800) {
   Serial.print("📤 Enviando: ");
@@ -27,8 +23,7 @@ void enviarComandoAT(const char *comando, unsigned long espera = 800) {
 
   Serial.print("📥 Resposta: ");
   while (SerialAT.available()) {
-    char c = SerialAT.read();
-    Serial.write(c);
+    Serial.write(SerialAT.read());
   }
   Serial.println("\n----------------------");
 }
@@ -46,23 +41,30 @@ bool registradoNaRede() {
   return resposta.indexOf("+CREG: 0,1") != -1 || resposta.indexOf("+CREG: 0,5") != -1;
 }
 
+void ativarGPS() {
+  Serial.println("📡 Ativando GNSS com AT+CGNSSPWR=1");
+  enviarComandoAT("AT+CGNSSPWR=1");
+  delay(1000);
+
+  Serial.println("📍 Verificando status do GNSS...");
+  enviarComandoAT("AT+CGNSSPWR?");
+  gpsAtivo = true;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(10);
   Serial.println("🔌 Iniciando ESP32 + A7670SA");
 
-  ligarModem();
-  Serial.println("✅ Modem acionado");
-
   SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
   delay(3000);
 
-  enviarComandoAT("AT");            // Teste comunicação
-  enviarComandoAT("ATE0");          // Desativa echo
-  enviarComandoAT("AT+CPIN?");      // Verifica SIM
-  enviarComandoAT("AT+CSQ");        // Sinal
-  enviarComandoAT("AT+CBANDCFG?");  // Bandas ativas
-  enviarComandoAT("AT+COPS?");      // Operadora atual
+  enviarComandoAT("AT");
+  enviarComandoAT("ATE0");
+  enviarComandoAT("AT+CPIN?");
+  enviarComandoAT("AT+CSQ");
+  enviarComandoAT("AT+COPS?");
+  enviarComandoAT("AT+CREG?");
 
   Serial.println("⏳ Esperando registro na rede celular...");
   int tentativas = 0;
@@ -78,8 +80,35 @@ void setup() {
   } else {
     Serial.println("✅ Registrado com sucesso na rede celular!");
   }
+
+  ativarGPS();
 }
 
 void loop() {
-  // nada a fazer
+  unsigned long agora = millis();
+  if (agora - ultimaConsulta >= intervaloConsulta) {
+    ultimaConsulta = agora;
+
+    Serial.println("📍 Consultando localização via AT+CGNSSINFO...");
+    SerialAT.println("AT+CGNSSINFO");
+    delay(1000);
+
+    String resposta = "";
+    while (SerialAT.available()) {
+      resposta += (char)SerialAT.read();
+    }
+
+    Serial.print("📥 Resposta: ");
+    Serial.println(resposta);
+    Serial.println("----------------------");
+
+    // Se falhar ou sem fix, tenta reativar
+    if (resposta.indexOf("ERROR") != -1 || resposta.indexOf(",,,,,,,") != -1) {
+      Serial.println("⚠️ Sem fix ou falha. Reiniciando GNSS...");
+      gpsAtivo = false;
+      enviarComandoAT("AT+CGNSSPWR=0");
+      delay(1000);
+      ativarGPS();
+    }
+  }
 }
