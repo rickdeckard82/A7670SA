@@ -1,114 +1,100 @@
-#define TINY_GSM_MODEM_SIM7600
-#define TINY_GSM_RX_BUFFER 1024
+// main.cpp — Teste de conexão com APN M2M Vivo
 
+// 1. DEFINA O MODELO DO MODEM ANTES DE INCLUIR A BIBLIOTECA
+#define TINY_GSM_MODEM_SIM7600  // Para o A7670 use SIM7600 (é o mais compatível)
+// OU experimente também:
+// #define TINY_GSM_MODEM_SIM7000
+#define TINY_GSM_DEBUG Serial
+
+// 2. INCLUA AS BIBLIOTECAS DEPOIS DA DEFINIÇÃO
 #include <Arduino.h>
 #include <TinyGsmClient.h>
 #include <HardwareSerial.h>
 
+// Configurações de hardware
 #define MODEM_RX 16
 #define MODEM_TX 17
+#define MODEM_BAUD 115200  // Baud rate padrão do A7670
 
 HardwareSerial SerialAT(2);
+TinyGsm modem(SerialAT);  // Agora deve reconhecer o tipo
+// Adicione esta variável global no início do seu código
+unsigned long lastTestTime = 0;
+const unsigned long testInterval = 30000; // 30 segundos entre testes
 
-unsigned long ultimaConsulta = 0;
-const unsigned long intervaloConsulta = 10000;  // 10 segundos
-
-bool gpsAtivo = false;
-
-void enviarComandoAT(const char *comando, unsigned long espera = 800) {
-  Serial.print("📤 Enviando: ");
-  Serial.println(comando);
-  SerialAT.println(comando);
-  delay(espera);
-
-  Serial.print("📥 Resposta: ");
-  while (SerialAT.available()) {
-    Serial.write(SerialAT.read());
-  }
-  Serial.println("\n----------------------");
-}
-
-bool registradoNaRede() {
-  SerialAT.println("AT+CREG?");
-  delay(500);
-  String resposta = "";
-  while (SerialAT.available()) {
-    char c = SerialAT.read();
-    resposta += c;
-  }
-  Serial.print("📶 Estado de registro: ");
-  Serial.println(resposta);
-  return resposta.indexOf("+CREG: 0,1") != -1 || resposta.indexOf("+CREG: 0,5") != -1;
-}
-
-void ativarGPS() {
-  Serial.println("📡 Ativando GNSS com AT+CGNSSPWR=1");
-  enviarComandoAT("AT+CGNSSPWR=1");
-  delay(1000);
-
-  Serial.println("📍 Verificando status do GNSS...");
-  enviarComandoAT("AT+CGNSSPWR?");
-  gpsAtivo = true;
-}
 
 void setup() {
   Serial.begin(115200);
-  delay(10);
-  Serial.println("🔌 Iniciando ESP32 + A7670SA");
-
-  SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
   delay(3000);
 
-  enviarComandoAT("AT");
-  enviarComandoAT("ATE0");
-  enviarComandoAT("AT+CPIN?");
-  enviarComandoAT("AT+CSQ");
-  enviarComandoAT("AT+COPS?");
-  enviarComandoAT("AT+CREG?");
+  SerialAT.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
+  delay(3000);
 
-  Serial.println("⏳ Esperando registro na rede celular...");
-  int tentativas = 0;
-  while (!registradoNaRede() && tentativas < 30) {
-    tentativas++;
-    Serial.print("⏱️ Tentativa ");
-    Serial.println(tentativas);
-    delay(3000);
+  Serial.println("🔌 Inicializando modem A7670...");
+
+  // Inicialização do modem
+  if (!modem.init()) {
+    Serial.println("❌ Falha ao inicializar modem");
+    return;
   }
+  
+  Serial.println("✅ Modem inicializado");
 
-  if (tentativas >= 30) {
-    Serial.println("❌ Não conseguiu registrar na rede após várias tentativas.");
+  // Verificar rede
+  Serial.print("Aguardando rede...");
+  if (!modem.waitForNetwork()) {
+    Serial.println("❌ Falha ao conectar na rede");
+    return;
+  }
+  Serial.println("✅ Conectado na rede");
+
+  // Conectar APN
+  Serial.print("Conectando na APN...");
+  if (!modem.gprsConnect("smart.m2m.vivo.com.br", "vivo", "vivo")) {
+    Serial.println("❌ Falha na conexão GPRS");
+    return;
+  }
+  Serial.println("✅ Conectado na APN");
+
+  // Mostrar IP
+  Serial.print("🌐 IP Local: ");
+  Serial.println(modem.localIP());
+}
+
+void testInternet() {
+  TinyGsmClient client(modem);
+  
+  if (client.connect("example.com", 80)) {
+    Serial.println("Conectado ao servidor");
+    client.print("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
+    delay(100);
+    
+    while (client.available()) {
+      Serial.write(client.read());
+    }
+    client.stop();
   } else {
-    Serial.println("✅ Registrado com sucesso na rede celular!");
+    Serial.println("Falha na conexão com a internet");
   }
-
-  ativarGPS();
 }
 
 void loop() {
-  unsigned long agora = millis();
-  if (agora - ultimaConsulta >= intervaloConsulta) {
-    ultimaConsulta = agora;
-
-    Serial.println("📍 Consultando localização via AT+CGNSSINFO...");
-    SerialAT.println("AT+CGNSSINFO");
-    delay(1000);
-
-    String resposta = "";
-    while (SerialAT.available()) {
-      resposta += (char)SerialAT.read();
-    }
-
-    Serial.print("📥 Resposta: ");
-    Serial.println(resposta);
-    Serial.println("----------------------");
-
-    // Se falhar ou sem fix, tenta reativar
-    if (resposta.indexOf("ERROR") != -1 || resposta.indexOf(",,,,,,,") != -1) {
-      Serial.println("⚠️ Sem fix ou falha. Reiniciando GNSS...");
-      gpsAtivo = false;
-      enviarComandoAT("AT+CGNSSPWR=0");
+ // Manter a conexão ativa (seu código existente)
+  if (!modem.isGprsConnected()) {
+    Serial.println("❌ Conexão GPRS perdida");
+    if (!modem.gprsConnect("smart.m2m.vivo.com.br", "vivo", "vivo")) {
+      Serial.println("❌ Falha ao reconectar");
       delay(1000);
-      ativarGPS();
+      return;
     }
   }
+
+  // Chamar testInternet() periodicamente
+  if (millis() - lastTestTime >= testInterval) {
+    testInternet();
+    lastTestTime = millis(); // Atualiza o tempo do último teste
+  }
+
+  delay(1000); // Pequeno delay para evitar sobrecarga
 }
+
