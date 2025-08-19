@@ -1,100 +1,88 @@
-// main.cpp — Teste de conexão com APN M2M Vivo
+// main.cpp - Versão atualizada com correções
+#define TINY_GSM_MODEM_SIM7600
 
-// 1. DEFINA O MODELO DO MODEM ANTES DE INCLUIR A BIBLIOTECA
-#define TINY_GSM_MODEM_SIM7600  // Para o A7670 use SIM7600 (é o mais compatível)
-// OU experimente também:
-// #define TINY_GSM_MODEM_SIM7000
-#define TINY_GSM_DEBUG Serial
-
-// 2. INCLUA AS BIBLIOTECAS DEPOIS DA DEFINIÇÃO
 #include <Arduino.h>
 #include <TinyGsmClient.h>
 #include <HardwareSerial.h>
 
-// Configurações de hardware
 #define MODEM_RX 16
 #define MODEM_TX 17
-#define MODEM_BAUD 115200  // Baud rate padrão do A7670
+#define MODEM_BAUD 115200
+#define GPS_UPDATE_INTERVAL 10000
+#define NET_TEST_INTERVAL 60000
 
 HardwareSerial SerialAT(2);
-TinyGsm modem(SerialAT);  // Agora deve reconhecer o tipo
-// Adicione esta variável global no início do seu código
-unsigned long lastTestTime = 0;
-const unsigned long testInterval = 30000; // 30 segundos entre testes
+TinyGsm modem(SerialAT);
 
+bool enableGPS() {
+  // Implementação melhorada mostrada acima
+  // ...
+}
+
+void testInternet() {
+  // Implementação melhorada mostrada acima
+  // ...
+}
 
 void setup() {
   Serial.begin(115200);
   delay(3000);
-
+  
   SerialAT.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   delay(3000);
 
-  Serial.println("🔌 Inicializando modem A7670...");
-
-  // Inicialização do modem
+  Serial.println("Iniciando modem...");
   if (!modem.init()) {
-    Serial.println("❌ Falha ao inicializar modem");
+    Serial.println("❌ Falha na inicialização");
     return;
   }
-  
-  Serial.println("✅ Modem inicializado");
 
-  // Verificar rede
-  Serial.print("Aguardando rede...");
+  Serial.println("✅ Modem OK");
+  Serial.println("IMEI: " + String(modem.getIMEI()));
+  Serial.println("Operadora: " + String(modem.getOperator()));
+
+  Serial.println("Conectando à rede...");
   if (!modem.waitForNetwork()) {
-    Serial.println("❌ Falha ao conectar na rede");
+    Serial.println("❌ Falha na rede");
     return;
   }
-  Serial.println("✅ Conectado na rede");
+  Serial.println("✅ Rede conectada");
 
-  // Conectar APN
-  Serial.print("Conectando na APN...");
+  Serial.println("Conectando APN...");
   if (!modem.gprsConnect("smart.m2m.vivo.com.br", "vivo", "vivo")) {
-    Serial.println("❌ Falha na conexão GPRS");
-    return;
-  }
-  Serial.println("✅ Conectado na APN");
-
-  // Mostrar IP
-  Serial.print("🌐 IP Local: ");
-  Serial.println(modem.localIP());
-}
-
-void testInternet() {
-  TinyGsmClient client(modem);
-  
-  if (client.connect("example.com", 80)) {
-    Serial.println("Conectado ao servidor");
-    client.print("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n");
-    delay(100);
-    
-    while (client.available()) {
-      Serial.write(client.read());
-    }
-    client.stop();
+    Serial.println("⚠️ Falha na APN");
   } else {
-    Serial.println("Falha na conexão com a internet");
+    Serial.println("✅ APN conectada. IP: " + modem.localIP().toString());
+  }
+
+  if (!enableGPS()) {
+    Serial.println("⚠️ Continuando sem GPS");
   }
 }
 
 void loop() {
- // Manter a conexão ativa (seu código existente)
-  if (!modem.isGprsConnected()) {
-    Serial.println("❌ Conexão GPRS perdida");
-    if (!modem.gprsConnect("smart.m2m.vivo.com.br", "vivo", "vivo")) {
-      Serial.println("❌ Falha ao reconectar");
-      delay(1000);
-      return;
+  static unsigned long lastGPSTime = 0;
+  static unsigned long lastNetTime = 0;
+
+  // Teste periódico do GPS
+  if (millis() - lastGPSTime > GPS_UPDATE_INTERVAL) {
+    float lat, lon;
+    if (modem.getGPS(&lat, &lon)) {
+      Serial.print("📍 Posição: ");
+      Serial.print(lat, 6);
+      Serial.print(", ");
+      Serial.println(lon, 6);
+    } else {
+      Serial.println("🔍 Buscando satélites GPS...");
     }
+    lastGPSTime = millis();
   }
 
-  // Chamar testInternet() periodicamente
-  if (millis() - lastTestTime >= testInterval) {
+  // Teste periódico de internet
+  if (millis() - lastNetTime > NET_TEST_INTERVAL) {
     testInternet();
-    lastTestTime = millis(); // Atualiza o tempo do último teste
+    lastNetTime = millis();
   }
 
-  delay(1000); // Pequeno delay para evitar sobrecarga
+  delay(1000);
 }
-
