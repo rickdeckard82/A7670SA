@@ -15,73 +15,88 @@ HardwareSerial SerialAT(2);
 TinyGsm modem(SerialAT);
 
 bool enableGPS() {
-  // Implementação melhorada mostrada acima
-  // ...
+  modem.sendAT("+CGPS=1,1");
+  if (modem.waitResponse(10000L) != 1) {
+    Serial.println("GPS initialization failed");
+    return false;
+  }
+  return true;
 }
 
 void testInternet() {
-  // Implementação melhorada mostrada acima
-  // ...
+  TinyGsmClient client(modem);
+  if (!client.connect("example.com", 80)) {
+    Serial.println("❌ Internet test failed");
+    return;
+  }
+  client.stop();
+  Serial.println("✅ Internet working");
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(3000);
+  delay(3000); // Wait for serial monitor
   
   SerialAT.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
-  delay(3000);
+  delay(3000); // Critical modem boot delay
 
-  Serial.println("Iniciando modem...");
-  if (!modem.init()) {
-    Serial.println("❌ Falha na inicialização");
-    return;
+  Serial.println("Initializing modem...");
+  if (!modem.restart()) { // More reliable than init()
+    Serial.println("❌ Modem failed");
+    ESP.restart();
   }
 
-  Serial.println("✅ Modem OK");
-  Serial.println("IMEI: " + String(modem.getIMEI()));
-  Serial.println("Operadora: " + String(modem.getOperator()));
-
-  Serial.println("Conectando à rede...");
-  if (!modem.waitForNetwork()) {
-    Serial.println("❌ Falha na rede");
-    return;
+  // Safe string handling
+  String imei = modem.getIMEI();
+  Serial.println("IMEI: " + (imei ? imei : "Unknown"));
+  
+  // Network connection with timeout
+  Serial.println("Connecting to network...");
+  if (!modem.waitForNetwork(180000)) { // 3-minute timeout
+    Serial.println("❌ Network failed");
+    ESP.restart();
   }
-  Serial.println("✅ Rede conectada");
+  Serial.println("✅ Network connected");
 
-  Serial.println("Conectando APN...");
-  if (!modem.gprsConnect("smart.m2m.vivo.com.br", "vivo", "vivo")) {
-    Serial.println("⚠️ Falha na APN");
+  // APN with fallback
+  const char* apn = "smart.m2m.vivo.com.br";
+  if (!modem.gprsConnect(apn, "vivo", "vivo")) {
+    Serial.println("⚠️ APN failed - trying alternative");
+    apn = "zap.vivo.com.br"; // Common fallback
+    if (!modem.gprsConnect(apn, "vivo", "vivo")) {
+      Serial.println("❌ Couldn't connect to any APN");
+    }
+  }
+  Serial.println("✅ GPRS connected. IP: " + modem.localIP().toString());
+
+  // GPS with verification
+  if (enableGPS()) {
+    Serial.println("✅ GPS enabled");
   } else {
-    Serial.println("✅ APN conectada. IP: " + modem.localIP().toString());
-  }
-
-  if (!enableGPS()) {
-    Serial.println("⚠️ Continuando sem GPS");
+    Serial.println("⚠️ GPS disabled");
   }
 }
 
 void loop() {
-  static unsigned long lastGPSTime = 0;
-  static unsigned long lastNetTime = 0;
+  static uint32_t lastGPSTime = 0;
+  static uint32_t lastNetTime = 0;
+  const uint32_t now = millis();
 
-  // Teste periódico do GPS
-  if (millis() - lastGPSTime > GPS_UPDATE_INTERVAL) {
-    float lat, lon;
-    if (modem.getGPS(&lat, &lon)) {
-      Serial.print("📍 Posição: ");
-      Serial.print(lat, 6);
-      Serial.print(", ");
-      Serial.println(lon, 6);
+  // GPS Reading with pointer validation
+  if (now - lastGPSTime > GPS_UPDATE_INTERVAL) {
+    float lat = 0, lon = 0;
+    if (modem.getGPS(&lat, &lon)) { // Library should handle NULL pointers
+      Serial.printf("📍 Position: %.6f, %.6f\n", lat, lon);
     } else {
-      Serial.println("🔍 Buscando satélites GPS...");
+      Serial.println("🔍 Searching for GPS satellites...");
     }
-    lastGPSTime = millis();
+    lastGPSTime = now;
   }
 
-  // Teste periódico de internet
-  if (millis() - lastNetTime > NET_TEST_INTERVAL) {
+  // Network test
+  if (now - lastNetTime > NET_TEST_INTERVAL) {
     testInternet();
-    lastNetTime = millis();
+    lastNetTime = now;
   }
 
   delay(1000);
