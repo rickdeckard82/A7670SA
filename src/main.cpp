@@ -16,19 +16,19 @@ TinyGsm modem(SerialAT);
 
 bool enableGPS() {
   // Sequência de inicialização robusta para GPS
-  modem.sendAT("+CGNSSPWR=1");  // Liga o GNSS
+  modem.sendAT("+CGNSSPWR=1,0");  // Liga o GNSS
   if (modem.waitResponse(10000L) != 1) {
     Serial.println("Failed to power GNSS");
     return false;
   }
   
-  modem.sendAT("+CGPS=1");  // Modo standalone
+  modem.sendAT("+CAGPS");  // Modo standalone
   if (modem.waitResponse(10000L) != 1) {
     Serial.println("Failed to set GPS mode");
     return false;
   }
 
-  modem.sendAT("+CGNSSCOLD");  // Cold start
+  modem.sendAT("+CGPSCOLD");  // Cold start
   if (modem.waitResponse(10000L) != 1) {
     Serial.println("Failed cold start");
   }
