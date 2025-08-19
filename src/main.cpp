@@ -89,7 +89,7 @@ void setup() {
   
   // Network connection with timeout
   Serial.println("Connecting to network...");
-  if (!modem.waitForNetwork(180000)) { // 3-minute timeout
+  if (!modem.waitForNetwork(1800)) { // 3-minute timeout
     Serial.println("❌ Network failed");
     ESP.restart();
   }
