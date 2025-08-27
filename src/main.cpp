@@ -1,153 +1,105 @@
-// main.cpp - Versão adaptada para GPS com comandos AT diretos
-#define TINY_GSM_MODEM_SIM7600
+// serial_bridge.ino — Ponte serial ESP32 <-> Modem A7670
+// Use isto para testar a UART do ESP32 exatamente como você faz no terminal do PC.
+// Tudo que você digitar no Serial Monitor (USB) será enviado ao modem, e vice-versa.
+//
+// Comandos especiais (digite e pressione Enter):
+//   ~baud 115200        -> troca a UART do modem para 115200 bps (reinicia UART2)
+//   ~pins 16 17         -> troca os pinos RX/TX da UART2 (ex.: RX=16, TX=17)
+//   ~help               -> mostra este help
+//
+// Observação: NÃO envia nada automaticamente. Você controla 100% os AT pela USB.
 
 #include <Arduino.h>
-#include <TinyGsmClient.h>
-#include <HardwareSerial.h>
 
-#define MODEM_RX 16
-#define MODEM_TX 17
-#define MODEM_BAUD 115200
-#define GPS_UPDATE_INTERVAL 10000
-#define NET_TEST_INTERVAL 60000
+// ---------- ajuste de pinos/baud padrão ----------
+static int MODEM_RX = 16;
+static int MODEM_TX = 17;
+static unsigned long MODEM_BAUD = 115200;
 
 HardwareSerial SerialAT(2);
-TinyGsm modem(SerialAT);
 
-bool enableGPS() {
-  // Sequência de inicialização robusta para GPS
-  modem.sendAT("+CGNSSPWR=1,0");  // Liga o GNSS
-  if (modem.waitResponse(10000L) != 1) {
-    Serial.println("Failed to power GNSS");
-    return false;
-  }
-  
-  modem.sendAT("+CAGPS");  // Modo standalone
-  if (modem.waitResponse(10000L) != 1) {
-    Serial.println("Failed to set GPS mode");
-    return false;
-  }
-
-  modem.sendAT("+CGPSCOLD");  // Cold start
-  if (modem.waitResponse(10000L) != 1) {
-    Serial.println("Failed cold start");
-  }
-
-  Serial.println("GPS initialization commands sent");
-  return true;
+void printHelp() {
+  Serial.println();
+  Serial.println(F("Comandos especiais:"));
+  Serial.println(F("  ~baud <valor>     -> ex.: ~baud 115200"));
+  Serial.println(F("  ~pins <rx> <tx>   -> ex.: ~pins 16 17"));
+  Serial.println(F("  ~help             -> este help"));
+  Serial.println();
 }
 
-String getGPSInfo() {
-  modem.sendAT("+CGPSINFO");
-  if (modem.waitResponse(10000L, "+CGPSINFO: ") == 1) {
-    String res = modem.stream.readStringUntil('\n');
-    res.trim();
-    return res;
-  }
-  return "";
-}
-
-void parseGPSData(const String& data, float& lat, float& lon) {
-  if (data.length() < 20 || data.startsWith(",,")) {  // Dados inválidos
-    lat = 0;
-    lon = 0;
-    return;
-  }
-
-  // Exemplo: "2220.68102,S,04710.74483,W,..."
-  int firstComma = data.indexOf(',');
-  int secondComma = data.indexOf(',', firstComma + 1);
-  int thirdComma = data.indexOf(',', secondComma + 1);
-  
-  String latStr = data.substring(0, firstComma);
-  String latDir = data.substring(firstComma + 1, secondComma);
-  String lonStr = data.substring(secondComma + 1, thirdComma);
-  String lonDir = data.substring(thirdComma + 1, thirdComma + 2);
-
-  // Converter de DMM.MMMMM para graus decimais
-  lat = latStr.substring(0, 2).toFloat() + (latStr.substring(2).toFloat() / 60.0);
-  if (latDir == "S") lat *= -1;
-  
-  lon = lonStr.substring(0, 3).toFloat() + (lonStr.substring(3).toFloat() / 60.0);
-  if (lonDir == "W") lon *= -1;
-}
-
-void testInternet() {
-  TinyGsmClient client(modem);
-  if (!client.connect("example.com", 80)) {
-    Serial.println("❌ Internet test failed");
-    return;
-  }
-  client.stop();
-  Serial.println("✅ Internet working");
+void beginAT() {
+  SerialAT.end();
+  delay(50);
+  SerialAT.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
+  delay(100);
+  Serial.print(F("[UART2] RX=")); Serial.print(MODEM_RX);
+  Serial.print(F(" TX=")); Serial.print(MODEM_TX);
+  Serial.print(F(" BAUD=")); Serial.println(MODEM_BAUD);
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(3000); // Wait for serial monitor
-  
-  SerialAT.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
-  delay(3000); // Critical modem boot delay
+  while (!Serial) { delay(10); }
+  Serial.println(F("\n=== ESP32 Serial Bridge -> A7670 ==="));
+  Serial.println(F("Digite AT+... e pressione Enter."));
+  printHelp();
+  beginAT();
+}
 
-  Serial.println("Initializing modem...");
-  if (!modem.restart()) {
-    Serial.println("❌ Modem failed");
-    ESP.restart();
-  }
+String cmdBuf;
 
-  String imei = modem.getIMEI();
-  Serial.println("IMEI: " + (imei ? imei : "Unknown"));
-  
-  Serial.println("Connecting to network...");
-  if (!modem.waitForNetwork(180000)) {
-    Serial.println("❌ Network failed");
-    ESP.restart();
-  }
-  Serial.println("✅ Network connected");
-
-  const char* apn = "smart.m2m.vivo.com.br";
-  if (!modem.gprsConnect(apn, "vivo", "vivo")) {
-    Serial.println("⚠️ APN failed - trying alternative");
-    apn = "zap.vivo.com.br";
-    if (!modem.gprsConnect(apn, "vivo", "vivo")) {
-      Serial.println("❌ Couldn't connect to any APN");
+void handleMetaCommand(const String& line) {
+  if (line.startsWith("~baud ")) {
+    unsigned long b = line.substring(6).toInt();
+    if (b >= 1200 && b <= 2000000UL) {
+      MODEM_BAUD = b;
+      beginAT();
+    } else {
+      Serial.println(F("[ERRO] Baud inválido."));
     }
-  }
-  Serial.println("✅ GPRS connected. IP: " + modem.localIP().toString());
-
-  if (enableGPS()) {
-    Serial.println("✅ GPS enabled");
+  } else if (line.startsWith("~pins ")) {
+    int sp1 = line.indexOf(' ', 6);
+    if (sp1 > 0) {
+      int rx = line.substring(6, sp1).toInt();
+      int tx = line.substring(sp1 + 1).toInt();
+      if (rx >= 0 && tx >= 0) {
+        MODEM_RX = rx; MODEM_TX = tx;
+        beginAT();
+      } else {
+        Serial.println(F("[ERRO] Pinos inválidos."));
+      }
+    } else {
+      Serial.println(F("[ERRO] Use: ~pins <rx> <tx>"));
+    }
+  } else if (line.startsWith("~help")) {
+    printHelp();
   } else {
-    Serial.println("⚠️ GPS disabled - using fallback");
+    Serial.println(F("[INFO] Comando especial desconhecido. Use ~help."));
   }
 }
 
 void loop() {
-  static uint32_t lastGPSTime = 0;
-  static uint32_t lastNetTime = 0;
-  const uint32_t now = millis();
-
-  // GPS Reading
-  if (now - lastGPSTime > GPS_UPDATE_INTERVAL) {
-    String gpsData = getGPSInfo();
-    if (gpsData.length() > 10 && !gpsData.startsWith(",,")) {
-      float lat, lon;
-      parseGPSData(gpsData, lat, lon);
-      Serial.printf("📍 Position: %.6f, %.6f\n", lat, lon);
-      
-      // Debug raw data
-      Serial.println("Raw GPS: " + gpsData);
+  // USB -> Modem
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r') continue;  // ignora CR
+    if (c == '\n') {
+      // linha completa
+      String line = cmdBuf;
+      cmdBuf = "";
+      if (line.startsWith("~")) {
+        handleMetaCommand(line);
+      } else {
+        SerialAT.println(line);   // envia ao modem com LF
+      }
     } else {
-      Serial.println("🔍 Searching for satellites...");
+      cmdBuf += c;
     }
-    lastGPSTime = now;
   }
 
-  // Network test
-  if (now - lastNetTime > NET_TEST_INTERVAL) {
-    testInternet();
-    lastNetTime = now;
+  // Modem -> USB
+  while (SerialAT.available()) {
+    char c = (char)SerialAT.read();
+    Serial.write(c);
   }
-
-  delay(1000);
 }
